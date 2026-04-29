@@ -1,13 +1,14 @@
 const std = @import("std");
 const CubicBezier = @import("CubicBezier.zig");
 const X = @import("x.zig");
+const image_resizer = @import("image_resizer.zig");
 const Io = std.Io;
 
 const POINTER_GRABBING_MASK = X.ButtonPressMask | X.PointerMotionMask;
 
 const TARGET_FPS = 60;
 const GROWN_SIZE = 240;
-const GROW_DURATION_MS = 1000;
+const GROW_DURATION_MS = 600;
 const GROW_CURVE = CubicBezier{ .x1 = 0.42, .y1 = 0.0, .x2 = 0.58, .y2 = 1.0 };
 
 const SPRITE_COUNT = (TARGET_FPS * GROW_DURATION_MS + std.time.ms_per_s - 1) / std.time.ms_per_s;
@@ -26,7 +27,7 @@ pub fn main(init: std.process.Init) !void {
     const cursor_config_size = X.cursorGetDefaultSize(display);
     const base_cursor = X.cursorLibraryLoadImage("left_ptr", null, cursor_config_size).?;
 
-    // Get the largest cursor image for the best big cursor quality
+    // Get the largest cursor image for the best grown cursor quality
     const cursor_image = X.cursorLibraryLoadImage("left_ptr", null, std.math.maxInt(i32)).?;
 
     var initialized_sprites: usize = 0;
@@ -39,49 +40,34 @@ pub fn main(init: std.process.Init) !void {
     const grown_ratio = @as(f32, @floatFromInt(GROWN_SIZE)) / @as(f32, @floatFromInt(base_cursor.size));
 
     for (sprites) |*s| {
-        s.* = X.cursorImageCreate(GROWN_SIZE, GROWN_SIZE) orelse return error.CursorImageCreateFailed;
-        initialized_sprites += 1;
-
-        const progress = GROW_CURVE.eval(
-            @as(f32, @floatFromInt(initialized_sprites - 1)) / (SPRITE_COUNT - 1),
-        );
-        const size: u32 = @round(std.math.lerp(
-            @as(f32, @floatFromInt(base_cursor.size)),
-            GROWN_SIZE,
+        const progress = GROW_CURVE.eval(@as(f32, @floatFromInt(initialized_sprites)) / (SPRITE_COUNT - 1));
+        const width: i32 = @round(std.math.lerp(
+            @as(f32, @floatFromInt(base_cursor.width)),
+            @as(f32, @floatFromInt(base_cursor.width)) * grown_ratio,
             progress,
         ));
-        const xhot: u32 = @round(std.math.lerp(
+        const height: i32 = @round(std.math.lerp(
+            @as(f32, @floatFromInt(base_cursor.height)),
+            @as(f32, @floatFromInt(base_cursor.height)) * grown_ratio,
+            progress,
+        ));
+
+        s.* = X.cursorImageCreate(width, height) orelse return error.CursorImageCreateFailed;
+        initialized_sprites += 1;
+
+        const img = s.*;
+        img.xhot = @round(std.math.lerp(
             @as(f32, @floatFromInt(base_cursor.xhot)),
             @as(f32, @floatFromInt(base_cursor.xhot)) * grown_ratio,
             progress,
         ));
-        const yhot: u32 = @round(std.math.lerp(
+        img.yhot = @round(std.math.lerp(
             @as(f32, @floatFromInt(base_cursor.yhot)),
             @as(f32, @floatFromInt(base_cursor.yhot)) * grown_ratio,
             progress,
         ));
 
-        const img = s.*;
-        img.xhot = xhot;
-        img.yhot = yhot;
-        for (0..size) |y| {
-            const cur_y: usize = @round(std.math.lerp(
-                0,
-                @as(f32, @floatFromInt(cursor_image.size - 1)),
-                @as(f32, @floatFromInt(y)) / @as(f32, @floatFromInt(size - 1)),
-            ));
-            for (0..size) |x| {
-                const cur_x: usize = @round(std.math.lerp(
-                    0,
-                    @as(f32, @floatFromInt(cursor_image.size - 1)),
-                    @as(f32, @floatFromInt(x)) / @as(f32, @floatFromInt(size - 1)),
-                ));
-
-                const idx = y * img.size + x;
-                const cur_idx = cur_y * cursor_image.size + cur_x;
-                img.pixels[idx] = cursor_image.pixels[cur_idx];
-            }
-        }
+        image_resizer.resize(cursor_image, img);
     }
 
     var initialized_cursors: usize = 0;
@@ -136,6 +122,24 @@ pub fn main(init: std.process.Init) !void {
     }
 
     try io.sleep(.fromSeconds(1), .awake);
+
+    timer = Io.Timestamp.now(io, .awake);
+    next_frame_ns = timer.nanoseconds;
+    for (0..SPRITE_COUNT) |inv_i| {
+        const i = SPRITE_COUNT - inv_i - 1;
+        X.changeActivePointerGrab(display, POINTER_GRABBING_MASK, cursors[i], X.CurrentTime);
+        try X.sync(display, false);
+
+        next_frame_ns += FPS_SLEEP;
+
+        const now_ts = Io.Clock.awake.now(io);
+        const frame_end_ns = timer.nanoseconds + timer.durationTo(now_ts).nanoseconds;
+        timer = now_ts;
+
+        if (next_frame_ns > frame_end_ns) {
+            try io.sleep(.fromNanoseconds(next_frame_ns - frame_end_ns), .awake);
+        }
+    }
 }
 
 test {
