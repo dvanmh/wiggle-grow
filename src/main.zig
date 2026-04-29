@@ -23,6 +23,20 @@ pub fn main(init: std.process.Init) !void {
     _ = c.XSetErrorHandler(xErrorHandler);
     _ = c.XSetIOErrorHandler(xIOErrorHandler);
 
+    var max_cursor_width: c_uint = 0;
+    var max_cursor_height: c_uint = 0;
+    _ = c.XQueryBestCursor(
+        display,
+        root,
+        std.math.maxInt(c_uint),
+        std.math.maxInt(c_uint),
+        &max_cursor_width,
+        &max_cursor_height,
+    );
+    if (GROWN_SIZE > max_cursor_width or GROWN_SIZE > max_cursor_height) {
+        return error.GrownCursorSizeTooBig;
+    }
+
     std.debug.print("Generating cursor sprites\n", .{});
 
     const sprites, const cursors = try generateCursorSprites(gpa, display);
