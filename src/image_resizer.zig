@@ -1,7 +1,7 @@
 const std = @import("std");
-const CursorImage = @import("x.zig").CursorImage;
+const c = @import("c.zig").c;
 
-pub fn resize(src: *CursorImage, dst: *CursorImage) void {
+pub fn resize(src: *c.XcursorImage, dst: *c.XcursorImage) void {
     const upscaling_x = dst.width > src.width;
     const upscaling_y = dst.height > src.height;
     if (upscaling_x or upscaling_y) {
@@ -12,7 +12,7 @@ pub fn resize(src: *CursorImage, dst: *CursorImage) void {
 }
 
 /// Downscale src into dst using area averaging (box filter)
-fn downscale(src: *CursorImage, dst: *CursorImage) void {
+fn downscale(src: *c.XcursorImage, dst: *c.XcursorImage) void {
     const scale_x = @as(f32, @floatFromInt(src.width)) / @as(f32, @floatFromInt(dst.width));
     const scale_y = @as(f32, @floatFromInt(src.height)) / @as(f32, @floatFromInt(dst.height));
 
@@ -58,7 +58,7 @@ fn downscale(src: *CursorImage, dst: *CursorImage) void {
 }
 
 /// Upscale src into dst using bicubic interpolation
-fn upscale(src: *CursorImage, dst: *CursorImage) void {
+fn upscale(src: *c.XcursorImage, dst: *c.XcursorImage) void {
     const scale_x = @as(f32, @floatFromInt(src.width)) / @as(f32, @floatFromInt(dst.width));
     const scale_y = @as(f32, @floatFromInt(src.height)) / @as(f32, @floatFromInt(dst.height));
 
@@ -71,7 +71,7 @@ fn upscale(src: *CursorImage, dst: *CursorImage) void {
     }
 }
 
-fn sampleBicubic(src: *CursorImage, sx: f32, sy: f32) u32 {
+fn sampleBicubic(src: *c.XcursorImage, sx: f32, sy: f32) u32 {
     const x = @floor(sx);
     const y = @floor(sy);
     const fx = sx - x;
@@ -114,10 +114,10 @@ fn sampleBicubic(src: *CursorImage, sx: f32, sy: f32) u32 {
     }
 
     // bicubic can produce out-of-range values at sharp edges
-    const a: u32 = std.math.clamp(@as(u32, @round(sum_a / total_weight)), 0, 255);
-    const r: u32 = std.math.clamp(@as(u32, @round(sum_r / total_weight)), 0, 255);
-    const g: u32 = std.math.clamp(@as(u32, @round(sum_g / total_weight)), 0, 255);
-    const b: u32 = std.math.clamp(@as(u32, @round(sum_b / total_weight)), 0, 255);
+    const a: u32 = @round(std.math.clamp(sum_a / total_weight, 0, 255));
+    const r: u32 = @round(std.math.clamp(sum_r / total_weight, 0, 255));
+    const g: u32 = @round(std.math.clamp(sum_g / total_weight, 0, 255));
+    const b: u32 = @round(std.math.clamp(sum_b / total_weight, 0, 255));
 
     return (a << 24) | (r << 16) | (g << 8) | b;
 }
@@ -135,10 +135,10 @@ fn cubicWeight(t: f32) f32 {
     return 0.0;
 }
 
-fn getPixel(bmp: *CursorImage, x: u32, y: u32) u32 {
+fn getPixel(bmp: *c.XcursorImage, x: u32, y: u32) u32 {
     return bmp.pixels[y * bmp.width + x];
 }
 
-fn setPixel(bmp: *CursorImage, x: u32, y: u32, color: u32) void {
+fn setPixel(bmp: *c.XcursorImage, x: u32, y: u32, color: u32) void {
     bmp.pixels[y * bmp.width + x] = color;
 }
