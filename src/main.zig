@@ -7,11 +7,13 @@ const Io = std.Io;
 
 const TARGET_FPS = 60;
 const GROWN_SIZE = 176;
-const GROW_DURATION_MS = 250;
+const GROW_DURATION_MS = 300;
+const SHRINK_DURATION_MS = 200;
 const STAY_GROWN_DURATION_MS = 100;
 const GROW_CURVE = CubicBezier{ .x1 = 0.42, .y1 = 0.0, .x2 = 0.58, .y2 = 1.0 };
 
-const SPRITE_COUNT = (TARGET_FPS * GROW_DURATION_MS + std.time.ms_per_s - 1) / std.time.ms_per_s;
+const GROW_SPRITE_COUNT = (TARGET_FPS * GROW_DURATION_MS + std.time.ms_per_s - 1) / std.time.ms_per_s;
+const SHRINK_SPRITE_COUNT = (TARGET_FPS * SHRINK_DURATION_MS + std.time.ms_per_s - 1) / std.time.ms_per_s;
 const FPS_SLEEP = std.time.ns_per_s / TARGET_FPS;
 
 pub fn main(init: std.process.Init) !void {
@@ -41,13 +43,22 @@ pub fn main(init: std.process.Init) !void {
 
     std.debug.print("Generating cursor sprites\n", .{});
 
-    const sprites, const cursors = try generateCursorSprites(gpa, display);
+    const grow_sprites, const grow_cursors = try generateCursorSprites(gpa, display, GROW_SPRITE_COUNT);
     defer {
-        for (sprites) |s| c.XcursorImageDestroy(s);
-        gpa.free(sprites);
-        for (cursors) |cs| _ = c.XFreeCursor(display, cs);
-        gpa.free(cursors);
+        for (grow_sprites) |s| c.XcursorImageDestroy(s);
+        gpa.free(grow_sprites);
+        for (grow_cursors) |cs| _ = c.XFreeCursor(display, cs);
+        gpa.free(grow_cursors);
     }
+
+    const shrink_sprites, const shrink_cursors = try generateCursorSprites(gpa, display, SHRINK_SPRITE_COUNT);
+    defer {
+        for (shrink_sprites) |s| c.XcursorImageDestroy(s);
+        gpa.free(shrink_sprites);
+        for (shrink_cursors) |cs| _ = c.XFreeCursor(display, cs);
+        gpa.free(shrink_cursors);
+    }
+    std.mem.reverse(c.Cursor, shrink_cursors);
 
     std.debug.print("Listening for cursor movements\n", .{});
 
@@ -100,7 +111,8 @@ pub fn main(init: std.process.Init) !void {
                         io,
                         display,
                         root,
-                        cursors,
+                        grow_cursors,
+                        shrink_cursors,
                         &wiggle_detector,
                         &future_finished,
                     });
@@ -120,7 +132,8 @@ fn growCursor(
     io: std.Io,
     display: *c.Display,
     window: c.Window,
-    cursors: []c.Cursor,
+    grow_cursors: []c.Cursor,
+    shrink_cursors: []c.Cursor,
     wiggle_detector: *const WiggleDetector,
     future_finished: *bool,
 ) !void {
@@ -134,40 +147,25 @@ fn growCursor(
         c.GrabModeAsync,
         c.GrabModeAsync,
         c.None,
-        cursors[0],
+        grow_cursors[0],
         c.CurrentTime,
     );
     if (grab_result != c.GrabSuccess) return error.GrabPointerFailed;
     defer _ = c.XUngrabPointer(display, c.CurrentTime);
-
     try xSync(display, false);
 
+    try animateCursor(io, display, grow_cursors);
+    stayGrown(io, wiggle_detector) catch |e| switch (e) {
+        error.Canceled => {}, // Shrinks immediately when being canceled
+    };
+    try animateCursor(io, display, shrink_cursors);
+}
+
+fn animateCursor(io: std.Io, display: *c.Display, cursors: []c.Cursor) !void {
     var timer = Io.Timestamp.now(io, .awake);
     var next_frame_ns = timer.nanoseconds;
-    for (0..SPRITE_COUNT) |i| {
-        _ = c.XChangeActivePointerGrab(display, POINTER_GRABBING_MASK, cursors[i], c.CurrentTime);
-        try xSync(display, false);
-
-        next_frame_ns += FPS_SLEEP;
-
-        const now_ts = Io.Clock.awake.now(io);
-        const frame_end_ns = timer.nanoseconds + timer.durationTo(now_ts).nanoseconds;
-        timer = now_ts;
-
-        if (next_frame_ns > frame_end_ns) {
-            try io.sleep(.fromNanoseconds(next_frame_ns - frame_end_ns), .awake);
-        }
-    }
-
-    stayGrown(io, wiggle_detector) catch |e| switch (e) {
-        error.Canceled => {}, // shrinks immediately when being canceled
-    };
-
-    timer = Io.Timestamp.now(io, .awake);
-    next_frame_ns = timer.nanoseconds;
-    for (0..SPRITE_COUNT) |inv_i| {
-        const i = SPRITE_COUNT - inv_i - 1;
-        _ = c.XChangeActivePointerGrab(display, POINTER_GRABBING_MASK, cursors[i], c.CurrentTime);
+    for (cursors) |cs| {
+        _ = c.XChangeActivePointerGrab(display, POINTER_GRABBING_MASK, cs, c.CurrentTime);
         try xSync(display, false);
 
         next_frame_ns += FPS_SLEEP;
@@ -207,6 +205,7 @@ fn stayGrown(io: std.Io, wiggle_detector: *const WiggleDetector) !void {
 fn generateCursorSprites(
     gpa: std.mem.Allocator,
     display: *c.Display,
+    sprite_count: usize,
 ) !struct { [][*c]c.XcursorImage, []c.Cursor } {
     const cursor_config_size = c.XcursorGetDefaultSize(display);
     const base_cursor_ptr = c.XcursorLibraryLoadImage("left_ptr", null, cursor_config_size);
@@ -216,7 +215,7 @@ fn generateCursorSprites(
     const cursor_image_ptr = c.XcursorLibraryLoadImage("left_ptr", null, std.math.maxInt(i32));
 
     var initialized_sprites: usize = 0;
-    var sprites = try gpa.alloc([*c]c.XcursorImage, SPRITE_COUNT);
+    var sprites = try gpa.alloc([*c]c.XcursorImage, sprite_count);
     errdefer {
         for (sprites[0..initialized_sprites]) |s| c.XcursorImageDestroy(s);
         gpa.free(sprites);
@@ -225,7 +224,7 @@ fn generateCursorSprites(
     const grown_ratio = @as(f32, @floatFromInt(GROWN_SIZE)) / @as(f32, @floatFromInt(base_cursor.size));
 
     for (sprites) |*s| {
-        const progress = GROW_CURVE.eval(@as(f32, @floatFromInt(initialized_sprites)) / (SPRITE_COUNT - 1));
+        const progress = GROW_CURVE.eval(@as(f32, @floatFromInt(initialized_sprites)) / @as(f32, @floatFromInt(sprite_count - 1)));
         const width: i32 = @round(std.math.lerp(
             @as(f32, @floatFromInt(base_cursor.width)),
             @as(f32, @floatFromInt(base_cursor.width)) * grown_ratio,
@@ -256,7 +255,7 @@ fn generateCursorSprites(
     }
 
     var initialized_cursors: usize = 0;
-    var cursors = try gpa.alloc(c.Cursor, SPRITE_COUNT);
+    var cursors = try gpa.alloc(c.Cursor, sprite_count);
     errdefer {
         for (cursors[0..initialized_sprites]) |cs| _ = c.XFreeCursor(display, cs);
         gpa.free(cursors);
