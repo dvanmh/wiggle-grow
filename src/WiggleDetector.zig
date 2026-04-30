@@ -2,10 +2,9 @@ const std = @import("std");
 
 const Self = @This();
 
-time_window_ms: i64 = 1000,
+time_window_ms: i64 = 750,
 min_distance_px: f64 = 3000.0,
-min_flips: u32 = 4,
-flip_dot_product_threshold: f64 = 0.5,
+min_flips: u32 = 6,
 min_velocity_px_per_ms: f64 = 3.5,
 
 samples: std.Deque(Sample),
@@ -67,7 +66,8 @@ pub fn isWiggling(self: *const Self, current_time: i64) bool {
 
     var total_dist: f64 = 0;
     var total_time_ms: i64 = 0;
-    var flips: u32 = 0;
+    var total_flips: u32 = 0;
+    var rotation_acc: f64 = 0;
 
     var last_delta: ?Point = null;
     var i: usize = 0;
@@ -80,14 +80,34 @@ pub fn isWiggling(self: *const Self, current_time: i64) bool {
         total_dist += dist;
         total_time_ms += sample.duration_ms;
 
-        // Ignores micro-movements for flip detection
+        // Ignores micro-movements for curvature detection
         if (dist > 1.0) {
             if (last_delta) |ld| {
                 const ld_mag = @sqrt(ld.x * ld.x + ld.y * ld.y);
                 if (ld_mag > 1.0) {
                     const dot = (ld.x * d.x + ld.y * d.y) / (ld_mag * dist);
-                    if (dot < -self.flip_dot_product_threshold) {
-                        flips += 1;
+                    const cross = (ld.x * d.y - ld.y * d.x) / (ld_mag * dist);
+
+                    if (dot < -0.5) {
+                        // Sharp turn (wiggling)
+
+                        total_flips += 1;
+                        rotation_acc = 0;
+                    } else {
+                        // Smooth turn (circling)
+
+                        // One flip per around 180 degrees to account for sampling
+                        const rotation_per_flip = std.math.pi * 0.98;
+                        const turn_angle = std.math.atan2(cross, dot);
+                        rotation_acc += turn_angle;
+                        if (@abs(rotation_acc) >= rotation_per_flip) {
+                            total_flips += 1;
+                            if (rotation_acc > 0) {
+                                rotation_acc -= rotation_per_flip;
+                            } else {
+                                rotation_acc += rotation_per_flip;
+                            }
+                        }
                     }
                 }
             }
@@ -101,7 +121,7 @@ pub fn isWiggling(self: *const Self, current_time: i64) bool {
         0;
 
     return total_dist >= self.min_distance_px and
-        flips >= self.min_flips and
+        total_flips >= self.min_flips and
         velocity >= self.min_velocity_px_per_ms;
 }
 
@@ -140,7 +160,7 @@ test "linear movement" {
     }
 }
 
-test "zig-zag movement" {
+test "wiggling movement" {
     const allocator = std.testing.allocator;
     var detector = try Self.init(allocator);
     defer detector.deinit();
@@ -154,6 +174,62 @@ test "zig-zag movement" {
     _ = try detector.addSample(0, 0, 20);
     _ = try detector.addSample(50, 0, 30);
     const is_wiggling = try detector.addSample(0, 0, 40);
+    try std.testing.expect(is_wiggling);
+}
+
+test "circling movement" {
+    const allocator = std.testing.allocator;
+    var detector = try Self.init(allocator);
+    defer detector.deinit();
+
+    detector.min_distance_px = 50;
+    detector.min_flips = 2;
+    detector.time_window_ms = 2000;
+    detector.min_velocity_px_per_ms = 0;
+
+    const radius = 50.0;
+    const steps_per_lap = 20;
+
+    var time_ms: i64 = 0;
+    for (0..2) |_| {
+        for (0..steps_per_lap) |s| {
+            const angle = 2.0 * std.math.pi * @as(f64, @floatFromInt(s)) / steps_per_lap;
+            const x = radius * @cos(angle);
+            const y = radius * @sin(angle);
+            _ = try detector.addSample(x, y, time_ms);
+            time_ms += 10;
+        }
+    }
+
+    const is_wiggling = try detector.addSample(radius, 0, time_ms);
+    try std.testing.expect(is_wiggling);
+}
+
+test "mixed movement" {
+    const allocator = std.testing.allocator;
+    var detector = try Self.init(allocator);
+    defer detector.deinit();
+
+    detector.min_distance_px = 50;
+    detector.min_flips = 2;
+    detector.min_velocity_px_per_ms = 0;
+
+    // 1. One wiggle flip
+    _ = try detector.addSample(0, 0, 0);
+    _ = try detector.addSample(50, 0, 10);
+    _ = try detector.addSample(0, 0, 20);
+
+    // 2. Half circular lap
+    const radius = 30.0;
+    const steps = 10;
+    for (0..steps) |s| {
+        const angle = 2.0 * std.math.pi * @as(f64, @floatFromInt(s)) / steps;
+        const x = radius * @cos(angle);
+        const y = radius * @sin(angle);
+        _ = try detector.addSample(x, y, 30 + @as(i64, @intCast(s)) * 10);
+    }
+
+    const is_wiggling = try detector.addSample(radius, 0, 300);
     try std.testing.expect(is_wiggling);
 }
 
