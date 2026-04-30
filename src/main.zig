@@ -1,12 +1,14 @@
 const std = @import("std");
-const c = @import("c.zig").c;
-const CubicBezier = @import("CubicBezier.zig");
+const c = @import("c");
 const image_resizer = @import("image_resizer.zig");
+const CubicBezier = @import("CubicBezier.zig");
+const WiggleDetector = @import("WiggleDetector.zig");
 const Io = std.Io;
 
 const TARGET_FPS = 60;
 const GROWN_SIZE = 176;
 const GROW_DURATION_MS = 250;
+const STAY_GROWN_DURATION_MS = 100;
 const GROW_CURVE = CubicBezier{ .x1 = 0.42, .y1 = 0.0, .x2 = 0.58, .y2 = 1.0 };
 
 const SPRITE_COUNT = (TARGET_FPS * GROW_DURATION_MS + std.time.ms_per_s - 1) / std.time.ms_per_s;
@@ -55,8 +57,13 @@ pub fn main(init: std.process.Init) !void {
         gpa.free(mask);
     }
 
-    var future: ?Io.Future(@typeInfo(@TypeOf(growCursor)).@"fn".return_type.?) = null;
-    defer if (future) |f| f.cancel(io) catch {};
+    var wiggle_detector = try WiggleDetector.init(gpa);
+    defer wiggle_detector.deinit();
+
+    var future_finished = true;
+    var last_wiggle_tracking_future_finished = true;
+    var future: Io.Future(@typeInfo(@TypeOf(growCursor)).@"fn".return_type.?) = undefined;
+    defer if (!future_finished) future.cancel(io) catch {};
 
     var event: c.XEvent = undefined;
     while (true) {
@@ -71,20 +78,37 @@ pub fn main(init: std.process.Init) !void {
                 const raw_event: *c.XIDeviceEvent = @ptrCast(@alignCast(cookie.data));
                 const x = raw_event.event_x;
                 const y = raw_event.event_y;
+                const now_ms = Io.Timestamp.now(io, .awake).toMilliseconds();
 
-                std.debug.print("Motion event: {d} - {d}\n", .{ x, y });
+                // Resets wiggle_detector after each cursor growing cycle so user cannot trigger
+                // cursor growing too many times in a short period
+                if (!last_wiggle_tracking_future_finished and future_finished) {
+                    wiggle_detector.reset();
+                }
+                const is_wiggling = try wiggle_detector.addSample(x, y, now_ms);
+                last_wiggle_tracking_future_finished = future_finished;
 
-                const any_button_held = blk: for (0..@intCast(raw_event.buttons.mask_len)) |i| {
+                const any_buttons_held = blk: for (0..@intCast(raw_event.buttons.mask_len)) |i| {
                     if (raw_event.buttons.mask[i >> 3] & (@as(u8, 1) << @as(u3, @intCast(i & 7))) != 0) {
                         break :blk true;
                     }
                 } else false;
 
-                if (!any_button_held) {
-                    if (future == null) {
-                        future = io.async(growCursor, .{ io, display, root, cursors });
-                    }
+                if (!any_buttons_held and is_wiggling and future_finished) {
+                    future_finished = false;
+                    future = io.async(growCursor, .{
+                        io,
+                        display,
+                        root,
+                        cursors,
+                        &wiggle_detector,
+                        &future_finished,
+                    });
                 }
+            }
+
+            if (cookie.evtype == c.XI_ButtonPress and !future_finished) {
+                future.cancel(io) catch {};
             }
         }
     }
@@ -92,7 +116,16 @@ pub fn main(init: std.process.Init) !void {
 
 const POINTER_GRABBING_MASK = c.ButtonPressMask | c.PointerMotionMask;
 
-fn growCursor(io: std.Io, display: *c.Display, window: c.Window, cursors: []c.Cursor) !void {
+fn growCursor(
+    io: std.Io,
+    display: *c.Display,
+    window: c.Window,
+    cursors: []c.Cursor,
+    wiggle_detector: *const WiggleDetector,
+    future_finished: *bool,
+) !void {
+    defer future_finished.* = true;
+
     const grab_result = c.XGrabPointer(
         display,
         window,
@@ -126,7 +159,9 @@ fn growCursor(io: std.Io, display: *c.Display, window: c.Window, cursors: []c.Cu
         }
     }
 
-    try io.sleep(.fromMilliseconds(1000), .awake);
+    stayGrown(io, wiggle_detector) catch |e| switch (e) {
+        error.Canceled => {}, // shrinks immediately when being canceled
+    };
 
     timer = Io.Timestamp.now(io, .awake);
     next_frame_ns = timer.nanoseconds;
@@ -145,6 +180,28 @@ fn growCursor(io: std.Io, display: *c.Display, window: c.Window, cursors: []c.Cu
             try io.sleep(.fromNanoseconds(next_frame_ns - frame_end_ns), .awake);
         }
     }
+}
+
+fn stayGrown(io: std.Io, wiggle_detector: *const WiggleDetector) !void {
+    var sleep_time_left_ms: i64 = STAY_GROWN_DURATION_MS;
+    var last_pos = wiggle_detector.last_pos;
+    while (wiggle_detector.isWiggling(Io.Timestamp.now(io, .awake).toMilliseconds())) {
+        try io.sleep(.fromMilliseconds(10), .awake);
+
+        const current_pos = wiggle_detector.last_pos;
+        if (std.meta.eql(last_pos, current_pos)) {
+            sleep_time_left_ms -= 10;
+        } else {
+            sleep_time_left_ms = STAY_GROWN_DURATION_MS;
+        }
+
+        if (sleep_time_left_ms <= 0) {
+            break;
+        }
+
+        last_pos = current_pos;
+    }
+    if (sleep_time_left_ms > 0) try io.sleep(.fromMilliseconds(sleep_time_left_ms), .awake);
 }
 
 fn generateCursorSprites(
@@ -237,8 +294,8 @@ fn registerPointerMotionEvents(
     errdefer gpa.free(mask);
     @memset(mask, 0);
 
-    const mask_event = c.XI_Motion;
-    mask[mask_event >> 3] |= (1 << (mask_event & 7));
+    mask[c.XI_Motion >> 3] |= (1 << (c.XI_Motion & 7));
+    mask[c.XI_ButtonPress >> 3] |= (1 << (c.XI_ButtonPress & 7));
 
     event_mask_ptr.* = c.XIEventMask{
         .deviceid = c.XIAllDevices,

@@ -1,5 +1,5 @@
 const std = @import("std");
-const c = @import("c.zig").c;
+const c = @import("c");
 
 pub fn resize(src: *c.XcursorImage, dst: *c.XcursorImage) void {
     const upscaling_x = dst.width > src.width;
