@@ -1,6 +1,9 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
+    const build_zon = @import("build.zig.zon");
+
+    const exe_name = "wg";
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -14,7 +17,7 @@ pub fn build(b: *std.Build) void {
     translate_c.linkSystemLibrary("Xi", .{});
 
     const exe = b.addExecutable(.{
-        .name = "wiggle_grow",
+        .name = exe_name,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
@@ -28,6 +31,11 @@ pub fn build(b: *std.Build) void {
         }),
     });
     b.installArtifact(exe);
+
+    const options = b.addOptions();
+    options.addOption([]const u8, "version", build_zon.version);
+    options.addOption([]const u8, "exe_name", exe_name);
+    exe.root_module.addOptions("config", options);
 
     const run_step = b.step("run", "Run the app");
     const run_cmd = b.addRunArtifact(exe);

@@ -2,15 +2,18 @@ const std = @import("std");
 
 const Self = @This();
 
-time_window_ms: i64 = 750,
-min_distance_px: f64 = 3000.0,
-min_flips: u32 = 6,
-min_velocity_px_per_ms: f64 = 3.5,
-
+config: Config,
 samples: std.Deque(Sample),
 allocator: std.mem.Allocator,
 last_pos: ?Point = null,
 last_time: i64 = 0,
+
+pub const Config = struct {
+    time_window_ms: u32,
+    min_distance_px: f32,
+    min_flips: u32,
+    min_velocity_px_per_ms: f32,
+};
 
 pub const Point = struct {
     x: f64,
@@ -24,9 +27,10 @@ pub const Sample = struct {
     delta: Point,
 };
 
-pub fn init(allocator: std.mem.Allocator) !Self {
+pub fn init(allocator: std.mem.Allocator, config: Config) !Self {
     return .{
         .allocator = allocator,
+        .config = config,
         .samples = try std.Deque(Sample).initCapacity(allocator, 64),
     };
 }
@@ -120,13 +124,13 @@ pub fn isWiggling(self: *const Self, current_time: i64) bool {
     else
         0;
 
-    return total_dist >= self.min_distance_px and
-        total_flips >= self.min_flips and
-        velocity >= self.min_velocity_px_per_ms;
+    return total_dist >= self.config.min_distance_px and
+        total_flips >= self.config.min_flips and
+        velocity >= self.config.min_velocity_px_per_ms;
 }
 
 fn firstUsable(self: *const Self, current_time: i64) ?usize {
-    const threshold = current_time - self.time_window_ms;
+    const threshold = current_time - self.config.time_window_ms;
 
     var i: usize = 0;
     var it = self.samples.iterator();
@@ -147,11 +151,13 @@ fn cleanup(self: *Self, current_time: i64) void {
 
 test "linear movement" {
     const allocator = std.testing.allocator;
-    var detector = try Self.init(allocator);
+    var detector = try Self.init(allocator, .{
+        .time_window_ms = 750,
+        .min_distance_px = 100,
+        .min_flips = 3,
+        .min_velocity_px_per_ms = 3.5,
+    });
     defer detector.deinit();
-
-    detector.min_distance_px = 100;
-    detector.min_flips = 3;
 
     var i: f64 = 0;
     while (i < 200) : (i += 10) {
@@ -162,12 +168,13 @@ test "linear movement" {
 
 test "wiggling movement" {
     const allocator = std.testing.allocator;
-    var detector = try Self.init(allocator);
+    var detector = try Self.init(allocator, .{
+        .min_distance_px = 50,
+        .min_flips = 3,
+        .time_window_ms = 1000,
+        .min_velocity_px_per_ms = 3.5,
+    });
     defer detector.deinit();
-
-    detector.min_distance_px = 50;
-    detector.min_flips = 3;
-    detector.time_window_ms = 1000;
 
     _ = try detector.addSample(0, 0, 0);
     _ = try detector.addSample(50, 0, 10);
@@ -179,13 +186,13 @@ test "wiggling movement" {
 
 test "circling movement" {
     const allocator = std.testing.allocator;
-    var detector = try Self.init(allocator);
+    var detector = try Self.init(allocator, .{
+        .min_distance_px = 50,
+        .min_flips = 2,
+        .time_window_ms = 2000,
+        .min_velocity_px_per_ms = 0,
+    });
     defer detector.deinit();
-
-    detector.min_distance_px = 50;
-    detector.min_flips = 2;
-    detector.time_window_ms = 2000;
-    detector.min_velocity_px_per_ms = 0;
 
     const radius = 50.0;
     const steps_per_lap = 20;
@@ -207,12 +214,13 @@ test "circling movement" {
 
 test "mixed movement" {
     const allocator = std.testing.allocator;
-    var detector = try Self.init(allocator);
+    var detector = try Self.init(allocator, .{
+        .time_window_ms = 750,
+        .min_distance_px = 50,
+        .min_flips = 2,
+        .min_velocity_px_per_ms = 0,
+    });
     defer detector.deinit();
-
-    detector.min_distance_px = 50;
-    detector.min_flips = 2;
-    detector.min_velocity_px_per_ms = 0;
 
     // 1. One wiggle flip
     _ = try detector.addSample(0, 0, 0);
@@ -237,13 +245,13 @@ test "min velocity" {
     const allocator = std.testing.allocator;
 
     {
-        var detector = try Self.init(allocator);
+        var detector = try Self.init(allocator, .{
+            .min_distance_px = 50,
+            .min_flips = 3,
+            .time_window_ms = 1000,
+            .min_velocity_px_per_ms = 2,
+        });
         defer detector.deinit();
-
-        detector.min_distance_px = 50;
-        detector.min_flips = 3;
-        detector.time_window_ms = 1000;
-        detector.min_velocity_px_per_ms = 2;
 
         // Move slowly (50px in 100ms)
         _ = try detector.addSample(0, 0, 0);
@@ -255,13 +263,13 @@ test "min velocity" {
     }
 
     {
-        var detector = try Self.init(allocator);
+        var detector = try Self.init(allocator, .{
+            .min_distance_px = 50,
+            .min_flips = 3,
+            .time_window_ms = 1000,
+            .min_velocity_px_per_ms = 2,
+        });
         defer detector.deinit();
-
-        detector.min_distance_px = 50;
-        detector.min_flips = 3;
-        detector.time_window_ms = 1000;
-        detector.min_velocity_px_per_ms = 2;
 
         // Move fast (50px in 10ms)
         _ = try detector.addSample(0, 0, 0);
@@ -275,12 +283,13 @@ test "min velocity" {
 
 test "window expiration" {
     const allocator = std.testing.allocator;
-    var detector = try Self.init(allocator);
+    var detector = try Self.init(allocator, .{
+        .min_distance_px = 50,
+        .min_flips = 3,
+        .time_window_ms = 1000,
+        .min_velocity_px_per_ms = 3.5,
+    });
     defer detector.deinit();
-
-    detector.min_distance_px = 50;
-    detector.min_flips = 3;
-    detector.time_window_ms = 1000;
 
     _ = try detector.addSample(0, 0, 0);
     _ = try detector.addSample(50, 0, 10);
