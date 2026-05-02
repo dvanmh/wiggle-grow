@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read Zig version from config
+        run: |
+          ZIG_VERSION=$(grep -E '^zig\s*=' mise.toml | sed 's/.*=\s*"\(.*\)"/\1/')
+          echo "ZIG_VERSION=$ZIG_VERSION" >> "$GITHUB_ENV"
+
+      - name: Install Zig
+        run: |
+          ZIG_TARBALL="zig-x86_64-linux-${ZIG_VERSION}"
+          URL="https://ziglang.org/download/${ZIG_VERSION}/${ZIG_TARBALL}.tar.xz"
+
+          echo "Downloading Zig from $URL"
+          curl -fsSL "$URL" -o zig.tar.xz
+          tar -xf zig.tar.xz
+
+          echo "$PWD/${ZIG_TARBALL}" >> "$GITHUB_PATH"
+
+      - name: Run tests
+        run: zig build test --summary all
