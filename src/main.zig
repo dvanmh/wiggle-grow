@@ -145,7 +145,6 @@ pub fn main(init: std.process.Init) !void {
         for (shrink_cursors) |cs| _ = c.XFreeCursor(display, cs);
         gpa.free(shrink_cursors);
     }
-    std.mem.reverse(c.Cursor, shrink_cursors);
 
     std.debug.print("Listening for cursor movements\n", .{});
 
@@ -250,19 +249,40 @@ fn growCursor(
     defer _ = c.XUngrabPointer(display, c.CurrentTime);
     try xSync(display, false);
 
-    try animateCursor(io, display, grow_cursors, time_between_frame_ns);
+    var animated_frame_idx: usize = 0;
+    animateCursor(io, display, grow_cursors, time_between_frame_ns, false, false, &animated_frame_idx) catch |e| switch (e) {
+        error.Canceled => {
+            if (animated_frame_idx > 0) {
+                // Plays the grow animation in reverse because the shrink animation can be
+                // different in duration and bezier curve, ruining the transition
+                try animateCursor(io, display, grow_cursors[0..animated_frame_idx], time_between_frame_ns, true, true, null);
+            }
+            return;
+        },
+        else => return e,
+    };
     stayGrown(io, wiggle_detector, stay_grown_duration_ms) catch |e| switch (e) {
         error.Canceled => {}, // Shrinks immediately when being canceled
     };
-    try animateCursor(io, display, shrink_cursors, time_between_frame_ns);
+    try animateCursor(io, display, shrink_cursors, time_between_frame_ns, true, true, null);
 }
 
-fn animateCursor(io: std.Io, display: *c.Display, cursors: []c.Cursor, time_between_frame_ns: u64) !void {
+fn animateCursor(
+    io: std.Io,
+    display: *c.Display,
+    cursors: []c.Cursor,
+    time_between_frame_ns: u64,
+    in_reverse: bool,
+    force_sleep: bool,
+    animated_frame_idx: ?*usize,
+) !void {
     var timer = Io.Timestamp.now(io, .awake);
     var next_frame_ns = timer.nanoseconds;
-    for (cursors) |cs| {
+    for (0..cursors.len) |i| {
+        const cs = cursors[if (in_reverse) cursors.len - i - 1 else i];
         _ = c.XChangeActivePointerGrab(display, POINTER_GRABBING_MASK, cs, c.CurrentTime);
         try xSync(display, false);
+        if (animated_frame_idx) |af| af.* = i;
 
         next_frame_ns += time_between_frame_ns;
 
@@ -271,7 +291,13 @@ fn animateCursor(io: std.Io, display: *c.Display, cursors: []c.Cursor, time_betw
         timer = now_ts;
 
         if (next_frame_ns > frame_end_ns) {
-            try io.sleep(.fromNanoseconds(next_frame_ns - frame_end_ns), .awake);
+            io.sleep(.fromNanoseconds(next_frame_ns - frame_end_ns), .awake) catch |e| switch (e) {
+                error.Canceled => if (force_sleep) {
+                    try io.sleep(.fromNanoseconds(next_frame_ns - frame_end_ns), .awake);
+                } else {
+                    return e;
+                },
+            };
         }
     }
 }

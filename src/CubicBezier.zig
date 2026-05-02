@@ -278,9 +278,9 @@ test "CubicBezier eval" {
                 sample[1],
                 getPreset(case.name).?.eval(sample[0]),
                 TEST_TOLERANCE,
-            ) catch |err| {
+            ) catch |e| {
                 std.debug.print("Failed test case: {s} at x={d}\n", .{ case.name, sample[0] });
-                return err;
+                return e;
             };
         }
     }
