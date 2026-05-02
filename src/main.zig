@@ -276,29 +276,44 @@ fn animateCursor(
     force_sleep: bool,
     animated_frame_idx: ?*usize,
 ) !void {
-    var timer = Io.Timestamp.now(io, .awake);
-    var next_frame_ns = timer.nanoseconds;
-    for (0..cursors.len) |i| {
-        const cs = cursors[if (in_reverse) cursors.len - i - 1 else i];
-        _ = c.XChangeActivePointerGrab(display, POINTER_GRABBING_MASK, cs, c.CurrentTime);
-        try xSync(display, false);
-        if (animated_frame_idx) |af| af.* = i;
+    const start_time = Io.Timestamp.now(io, .awake);
+    const total_duration_ns = cursors.len * time_between_frame_ns;
 
-        next_frame_ns += time_between_frame_ns;
+    var last_frame_idx: ?usize = null;
+    while (true) {
+        const now = Io.Timestamp.now(io, .awake);
+        const elapsed_ns: u64 = @intCast(start_time.durationTo(now).nanoseconds);
+        if (elapsed_ns >= total_duration_ns) break;
 
-        const now_ts = Io.Clock.awake.now(io);
-        const frame_end_ns = timer.nanoseconds + timer.durationTo(now_ts).nanoseconds;
-        timer = now_ts;
+        const frame_idx: usize = @intCast(elapsed_ns / time_between_frame_ns);
+        if (last_frame_idx == null or last_frame_idx.? != frame_idx) {
+            const cs = cursors[if (in_reverse) cursors.len - 1 - frame_idx else frame_idx];
+            _ = c.XChangeActivePointerGrab(display, POINTER_GRABBING_MASK, cs, c.CurrentTime);
+            try xSync(display, false);
+            if (animated_frame_idx) |af| af.* = frame_idx;
+            last_frame_idx = frame_idx;
+        }
 
-        if (next_frame_ns > frame_end_ns) {
-            io.sleep(.fromNanoseconds(next_frame_ns - frame_end_ns), .awake) catch |e| switch (e) {
+        const next_deadline_ns = (frame_idx + 1) * time_between_frame_ns;
+        if (next_deadline_ns > elapsed_ns) {
+            const sleep_ns = next_deadline_ns - elapsed_ns;
+            io.sleep(.fromNanoseconds(sleep_ns), .awake) catch |e| switch (e) {
                 error.Canceled => if (force_sleep) {
-                    try io.sleep(.fromNanoseconds(next_frame_ns - frame_end_ns), .awake);
+                    try io.sleep(.fromNanoseconds(sleep_ns), .awake);
                 } else {
                     return e;
                 },
             };
         }
+    }
+
+    // Ensures the final frame is displayed
+    const final_frame_idx = cursors.len - 1;
+    if (last_frame_idx == null or last_frame_idx.? != final_frame_idx) {
+        const cs = cursors[if (in_reverse) 0 else final_frame_idx];
+        _ = c.XChangeActivePointerGrab(display, POINTER_GRABBING_MASK, cs, c.CurrentTime);
+        try xSync(display, false);
+        if (animated_frame_idx) |af| af.* = final_frame_idx;
     }
 }
 
