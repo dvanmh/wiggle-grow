@@ -246,7 +246,10 @@ fn growCursor(
         c.CurrentTime,
     );
     if (grab_result != c.GrabSuccess) return error.GrabPointerFailed;
-    defer _ = c.XUngrabPointer(display, c.CurrentTime);
+    defer {
+        _ = c.XUngrabPointer(display, c.CurrentTime);
+        xSync(display, false) catch {};
+    }
     try xSync(display, false);
 
     var animated_frame_idx: usize = 0;
