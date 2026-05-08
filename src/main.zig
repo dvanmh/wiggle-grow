@@ -5,6 +5,10 @@ const image_resizer = @import("image_resizer.zig");
 const args_parser = @import("args_parser.zig");
 const CubicBezier = @import("CubicBezier.zig");
 const WiggleDetector = @import("WiggleDetector.zig");
+const CursorGrowthCycle = @import("CursorGrowthCycle.zig");
+const cursor_mode = @import("cursor_mode.zig");
+const window_mode = @import("window_mode.zig");
+const x11u = @import("x11_util.zig");
 const Io = std.Io;
 
 pub fn main(init: std.process.Init) !void {
@@ -17,6 +21,7 @@ pub fn main(init: std.process.Init) !void {
         struct {
             help: bool = false,
             version: bool = false,
+            mode: enum { window, cursor } = .window,
             fps: u32 = 60,
             cursor_size: u32 = 180,
             grow_duration: u32 = 300,
@@ -32,6 +37,7 @@ pub fn main(init: std.process.Init) !void {
             pub const shorts = struct {
                 h: []const u8 = "help",
                 v: []const u8 = "version",
+                m: []const u8 = "mode",
                 f: []const u8 = "fps",
                 c: []const u8 = "cursor_size",
                 g: []const u8 = "grow_duration",
@@ -58,6 +64,7 @@ pub fn main(init: std.process.Init) !void {
             \\Options:
             \\  -h, --help                         Show this help message
             \\  -v, --version                      Show version
+            \\  -m, --mode <mode>                  How to display the grown cursor (window or cursor, default: window)
             \\  -f, --fps <N>                      Cursor animation frame rate (default: 60)
             \\  -c, --cursor-size <N>              Cursor size in pixels when grown (default: 180)
             \\  -g, --grow-duration <N>            Duration in ms to grow the cursor (default: 300)
@@ -103,8 +110,8 @@ pub fn main(init: std.process.Init) !void {
     defer _ = c.XCloseDisplay(display);
     const root = c.XDefaultRootWindow(display);
 
-    _ = c.XSetErrorHandler(xErrorHandler);
-    _ = c.XSetIOErrorHandler(xIOErrorHandler);
+    _ = c.XSetErrorHandler(x11u.errorHandler);
+    _ = c.XSetIOErrorHandler(x11u.ioErrorHandler);
 
     const grow_sprite_count: usize =
         @intCast(@divTrunc(options.fps * options.grow_duration + std.time.ms_per_s - 1, std.time.ms_per_s));
@@ -112,38 +119,44 @@ pub fn main(init: std.process.Init) !void {
         @intCast(@divTrunc(options.fps * options.shrink_duration + std.time.ms_per_s - 1, std.time.ms_per_s));
     const time_between_frame_ns = @divTrunc(std.time.ns_per_s, options.fps);
 
-    var max_cursor_width: c_uint = 0;
-    var max_cursor_height: c_uint = 0;
-    _ = c.XQueryBestCursor(
-        display,
-        root,
-        std.math.maxInt(c_uint),
-        std.math.maxInt(c_uint),
-        &max_cursor_width,
-        &max_cursor_height,
-    );
-    if (options.cursor_size > max_cursor_width or options.cursor_size > max_cursor_height) {
-        return error.GrownCursorSizeTooBig;
+    if (options.mode == .cursor) {
+        var max_cursor_width: c_uint = 0;
+        var max_cursor_height: c_uint = 0;
+        _ = c.XQueryBestCursor(
+            display,
+            root,
+            std.math.maxInt(c_uint),
+            std.math.maxInt(c_uint),
+            &max_cursor_width,
+            &max_cursor_height,
+        );
+        if (options.cursor_size > max_cursor_width or options.cursor_size > max_cursor_height) {
+            return error.GrownCursorSizeTooBig;
+        }
     }
 
     std.debug.print("Generating cursor sprites\n", .{});
 
-    const grow_sprites, const grow_cursors =
-        try generateCursorSprites(gpa, display, grow_sprite_count, options.cursor_size, grow_bezier);
+    const cursor_config_size = c.XcursorGetDefaultSize(display);
+    const base_cursor_ptr = c.XcursorLibraryLoadImage("left_ptr", null, cursor_config_size);
+    defer c.XcursorImageDestroy(base_cursor_ptr);
+
+    // Get the largest cursor image for the best grown cursor quality
+    const cursor_image_ptr = c.XcursorLibraryLoadImage("left_ptr", null, std.math.maxInt(i32));
+    defer c.XcursorImageDestroy(cursor_image_ptr);
+
+    const grow_sprites =
+        try generateCursorSprites(gpa, base_cursor_ptr, cursor_image_ptr, grow_sprite_count, options.cursor_size, grow_bezier);
     defer {
         for (grow_sprites) |s| c.XcursorImageDestroy(s);
         gpa.free(grow_sprites);
-        for (grow_cursors) |cs| _ = c.XFreeCursor(display, cs);
-        gpa.free(grow_cursors);
     }
 
-    const shrink_sprites, const shrink_cursors =
-        try generateCursorSprites(gpa, display, shrink_sprite_count, options.cursor_size, shrink_bezier);
+    const shrink_sprites =
+        try generateCursorSprites(gpa, base_cursor_ptr, cursor_image_ptr, shrink_sprite_count, options.cursor_size, shrink_bezier);
     defer {
         for (shrink_sprites) |s| c.XcursorImageDestroy(s);
         gpa.free(shrink_sprites);
-        for (shrink_cursors) |cs| _ = c.XFreeCursor(display, cs);
-        gpa.free(shrink_cursors);
     }
 
     std.debug.print("Listening for cursor movements\n", .{});
@@ -162,199 +175,34 @@ pub fn main(init: std.process.Init) !void {
     });
     defer wiggle_detector.deinit();
 
-    var future_finished = true;
-    var last_wiggle_tracking_future_finished = true;
-    var future: Io.Future(@typeInfo(@TypeOf(growCursor)).@"fn".return_type.?) = undefined;
-    defer if (!future_finished) future.cancel(io) catch {};
+    const displayer = try switch (options.mode) {
+        .window => window_mode.initDisplayer(gpa, display, root, grow_sprites, shrink_sprites),
+        .cursor => cursor_mode.initDisplayer(gpa, display, root, grow_sprites, shrink_sprites),
+    };
+    defer displayer.deinit(displayer.ctx);
 
-    var event: c.XEvent = undefined;
-    while (true) {
-        _ = c.XNextEvent(display, &event);
-        if (event.type == c.GenericEvent and event.xgeneric.extension == xi_opcode and
-            c.XGetEventData(display, &event.xcookie) != 0)
-        {
-            const cookie = &event.xcookie;
-            defer c.XFreeEventData(display, cookie);
-
-            if (cookie.evtype == c.XI_Motion) {
-                const raw_event: *c.XIDeviceEvent = @ptrCast(@alignCast(cookie.data));
-                const x = raw_event.event_x;
-                const y = raw_event.event_y;
-                const now_ms = Io.Timestamp.now(io, .awake).toMilliseconds();
-
-                // Resets wiggle_detector after each cursor growing cycle so user cannot trigger
-                // cursor growing too many times in a short period
-                if (!last_wiggle_tracking_future_finished and future_finished) {
-                    wiggle_detector.reset();
-                }
-                const is_wiggling = try wiggle_detector.addSample(x, y, now_ms);
-                last_wiggle_tracking_future_finished = future_finished;
-
-                const any_buttons_held = blk: for (0..@intCast(raw_event.buttons.mask_len)) |i| {
-                    if (raw_event.buttons.mask[i >> 3] & (@as(u8, 1) << @as(u3, @intCast(i & 7))) != 0) {
-                        break :blk true;
-                    }
-                } else false;
-
-                if (!any_buttons_held and is_wiggling and future_finished) {
-                    future_finished = false;
-                    future = io.async(growCursor, .{
-                        io,
-                        display,
-                        root,
-                        grow_cursors,
-                        shrink_cursors,
-                        options.hold_duration,
-                        time_between_frame_ns,
-                        &wiggle_detector,
-                        &future_finished,
-                    });
-                }
-            }
-
-            if (cookie.evtype == c.XI_ButtonPress and !future_finished) {
-                future.cancel(io) catch {};
-            }
-        }
-    }
-}
-
-const POINTER_GRABBING_MASK = c.ButtonPressMask | c.PointerMotionMask;
-
-fn growCursor(
-    io: std.Io,
-    display: *c.Display,
-    window: c.Window,
-    grow_cursors: []c.Cursor,
-    shrink_cursors: []c.Cursor,
-    stay_grown_duration_ms: u32,
-    time_between_frame_ns: u64,
-    wiggle_detector: *const WiggleDetector,
-    future_finished: *bool,
-) !void {
-    defer future_finished.* = true;
-
-    const grab_result = c.XGrabPointer(
-        display,
-        window,
-        @intFromBool(false),
-        POINTER_GRABBING_MASK,
-        c.GrabModeAsync,
-        c.GrabModeAsync,
-        c.None,
-        grow_cursors[0],
-        c.CurrentTime,
-    );
-    if (grab_result != c.GrabSuccess) return error.GrabPointerFailed;
-    defer {
-        _ = c.XUngrabPointer(display, c.CurrentTime);
-        xSync(display, false) catch {};
-    }
-    try xSync(display, false);
-
-    var animated_frame_idx: usize = 0;
-    animateCursor(io, display, grow_cursors, time_between_frame_ns, false, false, &animated_frame_idx) catch |e| switch (e) {
-        error.Canceled => {
-            if (animated_frame_idx > 0) {
-                // Plays the grow animation in reverse because the shrink animation can be
-                // different in duration and bezier curve, ruining the transition
-                try animateCursor(io, display, grow_cursors[0..animated_frame_idx], time_between_frame_ns, true, true, null);
-            }
-            return;
+    var cycle = CursorGrowthCycle.init(
+        &wiggle_detector,
+        displayer,
+        .{
+            .grow_frame_count = grow_sprite_count,
+            .shrink_frame_count = shrink_sprite_count,
+            .hold_duration_ms = options.hold_duration,
+            .time_between_frame_ns = time_between_frame_ns,
         },
-        else => return e,
-    };
-    stayGrown(io, wiggle_detector, stay_grown_duration_ms) catch |e| switch (e) {
-        error.Canceled => {}, // Shrinks immediately when being canceled
-    };
-    try animateCursor(io, display, shrink_cursors, time_between_frame_ns, true, true, null);
-}
-
-fn animateCursor(
-    io: std.Io,
-    display: *c.Display,
-    cursors: []c.Cursor,
-    time_between_frame_ns: u64,
-    in_reverse: bool,
-    force_sleep: bool,
-    animated_frame_idx: ?*usize,
-) !void {
-    const start_time = Io.Timestamp.now(io, .awake);
-    const total_duration_ns = cursors.len * time_between_frame_ns;
-
-    var last_frame_idx: ?usize = null;
-    while (true) {
-        const now = Io.Timestamp.now(io, .awake);
-        const elapsed_ns: u64 = @intCast(start_time.durationTo(now).nanoseconds);
-        if (elapsed_ns >= total_duration_ns) break;
-
-        const frame_idx: usize = @intCast(elapsed_ns / time_between_frame_ns);
-        if (last_frame_idx == null or last_frame_idx.? != frame_idx) {
-            const cs = cursors[if (in_reverse) cursors.len - 1 - frame_idx else frame_idx];
-            _ = c.XChangeActivePointerGrab(display, POINTER_GRABBING_MASK, cs, c.CurrentTime);
-            try xSync(display, false);
-            if (animated_frame_idx) |af| af.* = frame_idx;
-            last_frame_idx = frame_idx;
-        }
-
-        const next_deadline_ns = (frame_idx + 1) * time_between_frame_ns;
-        if (next_deadline_ns > elapsed_ns) {
-            const sleep_ns = next_deadline_ns - elapsed_ns;
-            io.sleep(.fromNanoseconds(sleep_ns), .awake) catch |e| switch (e) {
-                error.Canceled => if (force_sleep) {
-                    try io.sleep(.fromNanoseconds(sleep_ns), .awake);
-                } else {
-                    return e;
-                },
-            };
-        }
-    }
-
-    // Ensures the final frame is displayed
-    const final_frame_idx = cursors.len - 1;
-    if (last_frame_idx == null or last_frame_idx.? != final_frame_idx) {
-        const cs = cursors[if (in_reverse) 0 else final_frame_idx];
-        _ = c.XChangeActivePointerGrab(display, POINTER_GRABBING_MASK, cs, c.CurrentTime);
-        try xSync(display, false);
-        if (animated_frame_idx) |af| af.* = final_frame_idx;
-    }
-}
-
-fn stayGrown(io: std.Io, wiggle_detector: *const WiggleDetector, stay_grown_duration_ms: u32) !void {
-    var sleep_time_left_ms: i64 = stay_grown_duration_ms;
-    var last_pos = wiggle_detector.last_pos;
-    while (wiggle_detector.isWiggling(Io.Timestamp.now(io, .awake).toMilliseconds())) {
-        try io.sleep(.fromMilliseconds(10), .awake);
-
-        const current_pos = wiggle_detector.last_pos;
-        if (std.meta.eql(last_pos, current_pos)) {
-            sleep_time_left_ms -= 10;
-        } else {
-            sleep_time_left_ms = stay_grown_duration_ms;
-        }
-
-        if (sleep_time_left_ms <= 0) {
-            break;
-        }
-
-        last_pos = current_pos;
-    }
-    if (sleep_time_left_ms > 0) try io.sleep(.fromMilliseconds(sleep_time_left_ms), .awake);
+    );
+    try cycle.run(io, display, xi_opcode);
 }
 
 fn generateCursorSprites(
     gpa: std.mem.Allocator,
-    display: *c.Display,
+    base_cursor_ptr: [*c]c.XcursorImage,
+    cursor_image_ptr: [*c]c.XcursorImage,
     sprite_count: usize,
     grown_size: u32,
     animation_curve: CubicBezier,
-) !struct { [][*c]c.XcursorImage, []c.Cursor } {
-    const cursor_config_size = c.XcursorGetDefaultSize(display);
-    const base_cursor_ptr = c.XcursorLibraryLoadImage("left_ptr", null, cursor_config_size);
+) ![][*c]c.XcursorImage {
     const base_cursor = base_cursor_ptr.*;
-
-    // Get the largest cursor image for the best grown cursor quality
-    const cursor_image_ptr = c.XcursorLibraryLoadImage("left_ptr", null, std.math.maxInt(i32));
 
     var initialized_sprites: usize = 0;
     var sprites = try gpa.alloc([*c]c.XcursorImage, sprite_count);
@@ -398,19 +246,7 @@ fn generateCursorSprites(
         image_resizer.resize(@ptrCast(@alignCast(cursor_image_ptr)), @ptrCast(@alignCast(img)));
     }
 
-    var initialized_cursors: usize = 0;
-    var cursors = try gpa.alloc(c.Cursor, sprite_count);
-    errdefer {
-        for (cursors[0..initialized_sprites]) |cs| _ = c.XFreeCursor(display, cs);
-        gpa.free(cursors);
-    }
-
-    for (cursors, 0..) |*cs, i| {
-        cs.* = c.XcursorImageLoadCursor(display, sprites[i]);
-        initialized_cursors += 1;
-    }
-
-    return .{ sprites, cursors };
+    return sprites;
 }
 
 fn registerPointerMotionEvents(
@@ -449,35 +285,9 @@ fn registerPointerMotionEvents(
     const select_result = c.XISelectEvents(display, window, event_mask_ptr, 1);
     if (select_result != c.Success) return error.XInputSelectEventsFailed;
 
-    try xSync(display, false);
+    try x11u.xSync(display, false);
 
     return .{ xi_opcode, event_mask_ptr, mask };
-}
-
-var xlib_error_occurred: bool = false;
-var xlib_error_code: c_int = 0;
-
-fn xErrorHandler(display: ?*c.Display, event: [*c]c.XErrorEvent) callconv(.c) c_int {
-    xlib_error_occurred = true;
-    xlib_error_code = event.*.error_code;
-
-    var buf: [256:0]u8 = undefined;
-    _ = c.XGetErrorText(display, event.*.error_code, &buf, @intCast(buf.len));
-    std.debug.print("X11 error: {s} (code={})\n", .{ buf, event.*.error_code });
-
-    return 0;
-}
-
-fn xIOErrorHandler(display: ?*c.Display) callconv(.c) c_int {
-    _ = display;
-    std.debug.print("Fatal X11 I/O error\n", .{});
-    std.process.exit(1);
-}
-
-fn xSync(display: *c.Display, discard: bool) !void {
-    xlib_error_occurred = false;
-    _ = c.XSync(display, @intFromBool(discard));
-    if (xlib_error_occurred) return error.X11Error;
 }
 
 test {

@@ -64,6 +64,17 @@ pub fn parse(
                             if (!builtin.is_test) std.debug.print("Invalid float value for flag {s}: {s}\n", .{ arg, val });
                             return error.InvalidValue;
                         },
+                        .@"enum" => std.meta.stringToEnum(field.type, val) orelse {
+                            if (!builtin.is_test) {
+                                std.debug.print("Invalid enum value for flag {s}: \"{s}\". Must be one of: ", .{ arg, val });
+                                inline for (std.meta.fields(field.type), 0..) |f, i| {
+                                    if (i > 0) std.debug.print(", ", .{});
+                                    std.debug.print("{s}", .{f.name});
+                                }
+                                std.debug.print("\n", .{});
+                            }
+                            return error.InvalidValue;
+                        },
                         else => @compileError("Unsupported value type for field: " ++ field.name),
                     };
                 };
@@ -112,15 +123,27 @@ test "parse" {
         bar: u32 = 0,
         baz: []const u8 = "",
         val: f32 = 0.0,
+        color: enum { red, green, blue } = .red,
     };
     var it = TestArgsIterator{
-        .args = &[_][]const u8{ "--foo", "--bar", "42", "--baz", "hello", "--val", "3.14" },
+        .args = &[_][]const u8{
+            "--foo",
+            "--bar",
+            "42",
+            "--baz",
+            "hello",
+            "--val",
+            "3.14",
+            "--color",
+            "blue",
+        },
     };
     const result = try parse(Schema, &it);
-    try std.testing.expect(result.foo == true);
-    try std.testing.expect(result.bar == 42);
-    try std.testing.expect(std.mem.eql(u8, result.baz, "hello"));
-    try std.testing.expect(result.val == 3.14);
+    try std.testing.expectEqual(true, result.foo);
+    try std.testing.expectEqual(42, result.bar);
+    try std.testing.expectEqualStrings("hello", result.baz);
+    try std.testing.expectEqual(3.14, result.val);
+    try std.testing.expectEqual(.blue, result.color);
 }
 
 test "parse with defaults" {
@@ -128,12 +151,14 @@ test "parse with defaults" {
         foo: bool = true,
         bar: u32 = 123,
         baz: []const u8 = "default",
+        color: enum { red, green, blue } = .red,
     };
     var it = TestArgsIterator{};
     const result = try parse(Schema, &it);
-    try std.testing.expect(result.foo == true);
-    try std.testing.expect(result.bar == 123);
-    try std.testing.expect(std.mem.eql(u8, result.baz, "default"));
+    try std.testing.expectEqual(true, result.foo);
+    try std.testing.expectEqual(123, result.bar);
+    try std.testing.expectEqualStrings("default", result.baz);
+    try std.testing.expectEqual(.red, result.color);
 }
 
 test "parse field with underscore" {
@@ -146,14 +171,14 @@ test "parse field with underscore" {
             .args = &[_][]const u8{"--foo-bar"},
         };
         const result = try parse(Schema, &it);
-        try std.testing.expect(result.foo_bar == true);
+        try std.testing.expectEqual(true, result.foo_bar);
     }
     {
         var it = TestArgsIterator{
             .args = &[_][]const u8{"-f"},
         };
         const result = try parse(Schema, &it);
-        try std.testing.expect(result.foo_bar == true);
+        try std.testing.expectEqual(true, result.foo_bar);
     }
     {
         var it = TestArgsIterator{
@@ -177,9 +202,9 @@ test "parse shorts" {
         .args = &[_][]const u8{ "-v", "--name", "zig", "-c", "-10" },
     };
     const result = try parse(Schema, &it);
-    try std.testing.expect(result.verbose == true);
-    try std.testing.expect(std.mem.eql(u8, result.name, "zig"));
-    try std.testing.expect(result.count == -10);
+    try std.testing.expectEqual(true, result.verbose);
+    try std.testing.expectEqualStrings("zig", result.name);
+    try std.testing.expectEqual(-10, result.count);
 }
 
 test "error: unknown flags" {
@@ -212,11 +237,16 @@ test "error: missing values" {
 test "error: invalid values" {
     {
         const Schema = struct { val: u32 = 0 };
-        var it = TestArgsIterator{ .args = &[_][]const u8{ "--val", "not_a_number" } };
+        var it = TestArgsIterator{ .args = &[_][]const u8{ "--val", "abc" } };
         try std.testing.expectError(error.InvalidValue, parse(Schema, &it));
     }
     {
         const Schema = struct { val: f32 = 0.0 };
+        var it = TestArgsIterator{ .args = &[_][]const u8{ "--val", "abc" } };
+        try std.testing.expectError(error.InvalidValue, parse(Schema, &it));
+    }
+    {
+        const Schema = struct { val: enum { red, blue } = .red };
         var it = TestArgsIterator{ .args = &[_][]const u8{ "--val", "abc" } };
         try std.testing.expectError(error.InvalidValue, parse(Schema, &it));
     }

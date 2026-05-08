@@ -30,12 +30,11 @@ Run the daemon:
 
 Now give your mouse a wiggle and watch it grow!
 
-**Note:** While the cursor is animating (growing, grown, or shrinking), mouse buttons are disabled (inputs are captured by the tool). Pressing any mouse button during this time will cause the cursor to start shrinking back to its original size immediately.
-
 ### Options
 
 - `-h, --help` : Show help message
 - `-v, --version` : Show version
+- `-m, --mode <mode>` : How to display the grown cursor (`window` or `cursor`, default: `window`)
 - `-f, --fps <N>` : Animation frame rate (default: 60)
 - `-c, --cursor-size <N>` : Grown cursor size in pixels (default: 180)
 - `-g, --grow-duration <N>` : Growth animation duration in ms (default: 300)
@@ -61,6 +60,28 @@ Bézier curve format (used by `-b` and `-B`):
 **Custom:**
 `<x1>,<y1>,<x2>,<y2>` (e.g., `0.25,0.1,0.25,1.0`)
 
-## Limitation
+## Display Modes
 
-The cursor will not grow if another application (such as a game or an application launcher like rofi) is already grabbing the mouse pointer, as the tool requires a successful pointer grab to display the grown cursor.
+`wiggle-grow` supports two ways to display the grown cursor.
+
+### Window Mode (Default)
+
+This mode creates a transparent, click-through overlay window that follows your mouse.
+
+- **Pros:**
+  + Does not interfere with mouse input; you can still click and scroll while the cursor is growing/grown/shrinking.
+  + Works even when other applications (games, application launchers like rofi, etc.) have an active pointer grab.
+- **Cons:**
+  + More resource intensive than cursor mode.
+  + May have a very slight lag behind the actual cursor position.
+
+### Cursor Mode
+
+This mode uses the X11 cursor system to swap the hardware cursor with larger sprites.
+
+- **Pros:**
+  + Extremely efficient.
+  + Perfectly synced with the hardware cursor.
+- **Cons:**
+  + Requires a pointer grab, which disables mouse buttons while growing/grown/shrinking.
+  + Will not work if another application already has a pointer grab (game, application launcher like rofi, etc.).

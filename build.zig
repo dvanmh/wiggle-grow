@@ -15,6 +15,8 @@ pub fn build(b: *std.Build) void {
     translate_c.linkSystemLibrary("X11", .{});
     translate_c.linkSystemLibrary("Xcursor", .{});
     translate_c.linkSystemLibrary("Xi", .{});
+    translate_c.linkSystemLibrary("Xfixes", .{});
+    translate_c.linkSystemLibrary("Xext", .{});
 
     const exe = b.addExecutable(.{
         .name = exe_name,
