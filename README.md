@@ -35,20 +35,20 @@ Now give your mouse a wiggle and watch it grow!
 - `-h, --help` : Show help message
 - `-v, --version` : Show version
 - `-m, --mode <mode>` : How to display the grown cursor (`window` or `cursor`, default: `window`)
-- `-f, --fps <N>` : Animation frame rate (default: 60)
-- `-c, --cursor-size <N>` : Grown cursor size in pixels (default: 180)
-- `-g, --grow-duration <N>` : Growth animation duration in ms (default: 300)
-- `-s, --shrink-duration <N>` : Shrink animation duration in ms (default: 150)
-- `-H, --hold-duration <N>` : Time to stay grown before shrinking in ms (default: 75)
-- `-b, --grow-bezier <S>` : Cubic Bézier curve for growth (default: easeInOut)
-- `-B, --shrink-bezier <S>` : Cubic Bézier curve for shrinking (default: easeInOut)
+- `-f, --fps <N>` : Animation frame rate (default: `60`)
+- `-c, --cursor-size <N>` : Grown cursor size in pixels (default: `180`)
+- `-g, --grow-duration <N>` : Growth animation duration in ms (default: `300`)
+- `-s, --shrink-duration <N>` : Shrink animation duration in ms (default: `150`)
+- `-H, --hold-duration <N>` : Time to stay grown before shrinking in ms (default: `75`)
+- `-b, --grow-bezier <S>` : Cubic Bézier curve for growth (default: `easeInOut`)
+- `-B, --shrink-bezier <S>` : Cubic Bézier curve for shrinking (default: `easeInOut`)
 
 ### Wiggle Detection Tuning
 
-- `-w, --wiggle-detection-window <N>` : Time window for detection in ms (default: 750)
-- `-d, --min-wiggle-distance <N>` : Min distance in pixels (default: 3000)
-- `-n, --min-wiggle-flips <N>` : Min direction changes (default: 6)
-- `-V, --min-wiggle-velocity <N>` : Min velocity in px/ms (default: 3.5)
+- `-w, --wiggle-detection-window <N>` : Time window for detection in ms (default: `750`)
+- `-d, --min-wiggle-distance <N>` : Min distance in pixels (default: `3000`)
+- `-n, --min-wiggle-flips <N>` : Min direction changes (default: `6`)
+- `-V, --min-wiggle-velocity <N>` : Min velocity in px/ms (default: `3.5`)
 
 ### Bézier Curves
 
