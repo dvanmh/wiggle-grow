@@ -101,3 +101,4 @@ This mode uses the X11 cursor system to swap the hardware cursor with larger spr
 - **Cons:**
   + Requires a pointer grab, which disables mouse buttons while growing/grown/shrinking.
   + Will not work if another application already has a pointer grab (game, application launcher like rofi, etc.).
+  + Maximum grown size is capped by hardware/driver limits. Check yours with `xdpyinfo | grep -i 'largest cursor'`.
