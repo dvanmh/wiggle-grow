@@ -13,6 +13,7 @@ pub const Config = struct {
     min_distance_px: f32,
     min_flips: u32,
     min_velocity_px_per_ms: f32,
+    min_maintain_velocity_px_per_ms: f32,
 };
 
 pub const Point = struct {
@@ -64,9 +65,15 @@ pub fn addSample(self: *Self, x: f64, y: f64, timestamp_ms: i64) !bool {
     return self.isWiggling(timestamp_ms);
 }
 
-pub fn isWiggling(self: *const Self, current_time: i64) bool {
+const Metrics = struct {
+    total_dist: f64,
+    total_flips: u32,
+    velocity: f64,
+};
+
+fn computeMetrics(self: *const Self, current_time: i64) ?Metrics {
     const first_usable = self.firstUsable(current_time);
-    if (first_usable == null) return false;
+    if (first_usable == null) return null;
 
     var total_dist: f64 = 0;
     var total_time_ms: i64 = 0;
@@ -124,9 +131,23 @@ pub fn isWiggling(self: *const Self, current_time: i64) bool {
     else
         0;
 
-    return total_dist >= self.config.min_distance_px and
-        total_flips >= self.config.min_flips and
-        velocity >= self.config.min_velocity_px_per_ms;
+    return .{
+        .total_dist = total_dist,
+        .total_flips = total_flips,
+        .velocity = velocity,
+    };
+}
+
+pub fn isWiggling(self: *const Self, current_time: i64) bool {
+    const metrics = self.computeMetrics(current_time) orelse return false;
+    return metrics.total_dist >= self.config.min_distance_px and
+        metrics.total_flips >= self.config.min_flips and
+        metrics.velocity >= self.config.min_velocity_px_per_ms;
+}
+
+pub fn isStillWiggling(self: *const Self, current_time: i64) bool {
+    const metrics = self.computeMetrics(current_time) orelse return false;
+    return metrics.velocity >= self.config.min_maintain_velocity_px_per_ms;
 }
 
 fn firstUsable(self: *const Self, current_time: i64) ?usize {
@@ -156,6 +177,7 @@ test "linear movement" {
         .min_distance_px = 100,
         .min_flips = 3,
         .min_velocity_px_per_ms = 3.5,
+        .min_maintain_velocity_px_per_ms = 3.5,
     });
     defer detector.deinit();
 
@@ -173,6 +195,7 @@ test "wiggling movement" {
         .min_flips = 3,
         .time_window_ms = 1000,
         .min_velocity_px_per_ms = 3.5,
+        .min_maintain_velocity_px_per_ms = 3.5,
     });
     defer detector.deinit();
 
@@ -191,6 +214,7 @@ test "circling movement" {
         .min_flips = 2,
         .time_window_ms = 2000,
         .min_velocity_px_per_ms = 0,
+        .min_maintain_velocity_px_per_ms = 0,
     });
     defer detector.deinit();
 
@@ -219,6 +243,7 @@ test "mixed movement" {
         .min_distance_px = 50,
         .min_flips = 2,
         .min_velocity_px_per_ms = 0,
+        .min_maintain_velocity_px_per_ms = 0,
     });
     defer detector.deinit();
 
@@ -250,6 +275,7 @@ test "min velocity" {
             .min_flips = 3,
             .time_window_ms = 1000,
             .min_velocity_px_per_ms = 2,
+            .min_maintain_velocity_px_per_ms = 2,
         });
         defer detector.deinit();
 
@@ -268,6 +294,7 @@ test "min velocity" {
             .min_flips = 3,
             .time_window_ms = 1000,
             .min_velocity_px_per_ms = 2,
+            .min_maintain_velocity_px_per_ms = 2,
         });
         defer detector.deinit();
 
@@ -288,6 +315,7 @@ test "window expiration" {
         .min_flips = 3,
         .time_window_ms = 1000,
         .min_velocity_px_per_ms = 3.5,
+        .min_maintain_velocity_px_per_ms = 3.5,
     });
     defer detector.deinit();
 
@@ -300,4 +328,26 @@ test "window expiration" {
 
     is_wiggling = try detector.addSample(0, 0, 1500);
     try std.testing.expect(!is_wiggling);
+}
+
+test "isStillWiggling only checks maintain velocity" {
+    const allocator = std.testing.allocator;
+    var detector = try Self.init(allocator, .{
+        .min_distance_px = 9999,
+        .min_flips = 9999,
+        .time_window_ms = 1000,
+        .min_velocity_px_per_ms = 5,
+        .min_maintain_velocity_px_per_ms = 1,
+    });
+    defer detector.deinit();
+
+    // Slow movement doesn't meet distance/flips/velocity trigger, only maintain velocity
+    _ = try detector.addSample(0, 0, 0);
+    _ = try detector.addSample(50, 0, 20);
+    _ = try detector.addSample(0, 0, 40);
+    _ = try detector.addSample(50, 0, 60);
+    _ = try detector.addSample(0, 0, 80);
+
+    try std.testing.expect(!detector.isWiggling(80));
+    try std.testing.expect(detector.isStillWiggling(80));
 }

@@ -33,6 +33,7 @@ pub fn main(init: std.process.Init) !void {
             min_wiggle_distance: f32 = 3000.0,
             min_wiggle_flips: u32 = 6,
             min_wiggle_velocity: f32 = 3.5,
+            min_maintain_wiggle_velocity: f32 = 3.5,
 
             pub const shorts = struct {
                 h: []const u8 = "help",
@@ -49,6 +50,7 @@ pub fn main(init: std.process.Init) !void {
                 d: []const u8 = "min_wiggle_distance",
                 n: []const u8 = "min_wiggle_flips",
                 V: []const u8 = "min_wiggle_velocity",
+                M: []const u8 = "min_maintain_wiggle_velocity",
             };
         },
         args_iterator,
@@ -62,20 +64,21 @@ pub fn main(init: std.process.Init) !void {
         ++ "Usage: " ++ config.exe_name ++ " [options]\n" ++
             \\
             \\Options:
-            \\  -h, --help                         Show this help message
-            \\  -v, --version                      Show version
-            \\  -m, --mode <mode>                  How to display the grown cursor (window or cursor, default: window)
-            \\  -f, --fps <N>                      Cursor animation frame rate (default: 60)
-            \\  -c, --cursor-size <N>              Cursor size in pixels when grown (default: 180)
-            \\  -g, --grow-duration <N>            Duration in ms to grow the cursor (default: 300)
-            \\  -s, --shrink-duration <N>          Duration in ms to shrink the cursor back (default: 150)
-            \\  -H, --hold-duration <N>            Duration in ms to stay grown before shrinking (default: 75)
-            \\  -b, --grow-bezier <S>              Cubic Bézier curve for grow animation (default: easeInOut)
-            \\  -B, --shrink-bezier <S>            Cubic Bézier curve for shrink animation (default: easeInOut)
-            \\  -w, --wiggle-detection-window <N>  Time window in ms for wiggle detection (default: 750)
-            \\  -d, --min-wiggle-distance <N>      Minimum distance in pixels to count as wiggling (default: 3000)
-            \\  -n, --min-wiggle-flips <N>         Minimum direction changes to count as wiggling (default: 6)
-            \\  -V, --min-wiggle-velocity <N>      Minimum velocity in px/ms to count as wiggling (default: 3.5)
+            \\  -h, --help                              Show this help message
+            \\  -v, --version                           Show version
+            \\  -m, --mode <mode>                       How to display the grown cursor (window or cursor, default: window)
+            \\  -f, --fps <N>                           Cursor animation frame rate (default: 60)
+            \\  -c, --cursor-size <N>                   Cursor size in pixels when grown (default: 180)
+            \\  -g, --grow-duration <N>                 Duration in ms to grow the cursor (default: 300)
+            \\  -s, --shrink-duration <N>               Duration in ms to shrink the cursor back (default: 150)
+            \\  -H, --hold-duration <N>                 Duration in ms to stay grown before shrinking (default: 75)
+            \\  -b, --grow-bezier <S>                   Cubic Bézier curve for grow animation (default: easeInOut)
+            \\  -B, --shrink-bezier <S>                 Cubic Bézier curve for shrink animation (default: easeInOut)
+            \\  -w, --wiggle-detection-window <N>       Time window in ms for wiggle detection (default: 750)
+            \\  -d, --min-wiggle-distance <N>           Minimum distance in pixels to trigger cursor growth (default: 3000)
+            \\  -n, --min-wiggle-flips <N>              Minimum direction changes to trigger cursor growth (default: 6)
+            \\  -V, --min-wiggle-velocity <N>           Minimum velocity in px/ms to trigger cursor growth (default: 3.5)
+            \\  -M, --min-maintain-wiggle-velocity <N>  Minimum velocity in px/ms to keep cursor grown once triggered (default: 3.5)
             \\
             \\Bézier curve format (used by -b and -B):
             \\  Preset: one of
@@ -172,6 +175,7 @@ pub fn main(init: std.process.Init) !void {
         .min_distance_px = options.min_wiggle_distance,
         .min_flips = options.min_wiggle_flips,
         .min_velocity_px_per_ms = options.min_wiggle_velocity,
+        .min_maintain_velocity_px_per_ms = options.min_maintain_wiggle_velocity,
     });
     defer wiggle_detector.deinit();
 

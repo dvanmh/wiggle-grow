@@ -46,9 +46,10 @@ Now give your mouse a wiggle and watch it grow!
 ### Wiggle Detection Tuning
 
 - `-w, --wiggle-detection-window <N>` : Time window for detection in ms (default: `750`)
-- `-d, --min-wiggle-distance <N>` : Min distance in pixels (default: `3000`)
-- `-n, --min-wiggle-flips <N>` : Min direction changes (default: `6`)
-- `-V, --min-wiggle-velocity <N>` : Min velocity in px/ms (default: `3.5`)
+- `-d, --min-wiggle-distance <N>` : Min distance in pixels to trigger cursor growth (default: `3000`)
+- `-n, --min-wiggle-flips <N>` : Min direction changes to trigger cursor growth (default: `6`)
+- `-V, --min-wiggle-velocity <N>` : Min velocity in px/ms to trigger cursor growth (default: `3.5`)
+- `-M, --min-maintain-wiggle-velocity <N>` : Min velocity in px/ms to keep cursor grown once triggered (default: `3.5`)
 
 ### Bézier Curves
 

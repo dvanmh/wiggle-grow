@@ -223,7 +223,7 @@ fn animateLoop(
 fn stayGrown(io: Io, wiggle_detector: *const WiggleDetector, stay_grown_duration_ms: u32) !void {
     var sleep_time_left_ms: i64 = stay_grown_duration_ms;
     var last_pos = wiggle_detector.last_pos;
-    while (wiggle_detector.isWiggling(Io.Timestamp.now(io, .awake).toMilliseconds())) {
+    while (wiggle_detector.isStillWiggling(Io.Timestamp.now(io, .awake).toMilliseconds())) {
         try io.sleep(.fromMilliseconds(10), .awake);
 
         const current_pos = wiggle_detector.last_pos;
