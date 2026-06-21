@@ -32,7 +32,7 @@ jobs:
           echo "$PWD/${ZIG_TARBALL}" >> "$GITHUB_PATH"
 
       - name: Install C library headers
-        run: sudo apt-get install -y libx11-dev libxcursor-dev libxi-dev
+        run: sudo apt-get install -y libx11-dev libxcursor-dev libxtst-dev
 
       - name: Run tests
         run: zig build test --summary all
