@@ -8,6 +8,7 @@ const WiggleDetector = @import("WiggleDetector.zig");
 const CursorGrowthCycle = @import("CursorGrowthCycle.zig");
 const cursor_mode = @import("cursor_mode.zig");
 const window_mode = @import("window_mode.zig");
+const Recorder = @import("Recorder.zig");
 const x11u = @import("x11_util.zig");
 const Io = std.Io;
 
@@ -164,11 +165,13 @@ pub fn main(init: std.process.Init) !void {
 
     std.debug.print("Listening for cursor movements\n", .{});
 
-    const xi_opcode, const event_mask_ptr, const mask = try registerPointerMotionEvents(gpa, display, root);
-    defer {
-        gpa.destroy(event_mask_ptr);
-        gpa.free(mask);
-    }
+    // We track pointer position via the X Record extension rather than the more obvious alternatives,
+    // each of which has a dealbreaking flaw:
+    //   - MotionNotify: doesn't fire when the pointer is grabbed by another window (e.g. rofi).
+    //   - XInput RawMotion: synthetic events (xdotool, KDE Connect remote input) are not reported.
+    //   - XInput Motion: stops reporting when the pointer moves over a Qt window (for some reasons).
+    var recorder = try Recorder.init(io, display);
+    defer recorder.deinit(io);
 
     var wiggle_detector = try WiggleDetector.init(gpa, .{
         .time_window_ms = options.wiggle_detection_window,
@@ -195,7 +198,9 @@ pub fn main(init: std.process.Init) !void {
             .time_between_frame_ns = time_between_frame_ns,
         },
     );
-    try cycle.run(io, display, xi_opcode);
+
+    recorder.start();
+    try cycle.run(io, &recorder);
 }
 
 fn generateCursorSprites(
@@ -251,47 +256,6 @@ fn generateCursorSprites(
     }
 
     return sprites;
-}
-
-fn registerPointerMotionEvents(
-    gpa: std.mem.Allocator,
-    display: *c.Display,
-    window: c.Window,
-) !struct { i32, *c.XIEventMask, []u8 } {
-    var xi_opcode: i32 = undefined;
-    var event: i32 = undefined;
-    var err: i32 = undefined;
-    if (c.XQueryExtension(display, "XInputExtension", &xi_opcode, &event, &err) == 0) {
-        return error.XInputNotAvailable;
-    }
-
-    var major: i32 = 2;
-    var minor: i32 = 0;
-    const query_result = c.XIQueryVersion(display, &major, &minor);
-    if (query_result != c.Success) return error.XInput2NotSupported;
-
-    const event_mask_ptr = try gpa.create(c.XIEventMask);
-    errdefer gpa.destroy(event_mask_ptr);
-
-    const mask = try gpa.alloc(u8, c.XIMaskLen(c.XI_LASTEVENT));
-    errdefer gpa.free(mask);
-    @memset(mask, 0);
-
-    mask[c.XI_Motion >> 3] |= (1 << (c.XI_Motion & 7));
-    mask[c.XI_ButtonPress >> 3] |= (1 << (c.XI_ButtonPress & 7));
-
-    event_mask_ptr.* = c.XIEventMask{
-        .deviceid = c.XIAllDevices,
-        .mask_len = @intCast(mask.len),
-        .mask = @ptrCast(mask),
-    };
-
-    const select_result = c.XISelectEvents(display, window, event_mask_ptr, 1);
-    if (select_result != c.Success) return error.XInputSelectEventsFailed;
-
-    try x11u.xSync(display, false);
-
-    return .{ xi_opcode, event_mask_ptr, mask };
 }
 
 test {

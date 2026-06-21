@@ -1,6 +1,6 @@
 const std = @import("std");
-const c = @import("c");
 const WiggleDetector = @import("WiggleDetector.zig");
+const Recorder = @import("Recorder.zig");
 const Io = std.Io;
 
 const Self = @This();
@@ -44,34 +44,18 @@ pub fn init(wiggle_detector: *WiggleDetector, displayer: Displayer, config: Conf
     };
 }
 
-pub fn run(self: *Self, io: Io, display: *c.Display, xi_opcode: i32) !void {
+pub fn run(self: *Self, io: Io, recorder: *Recorder) !void {
     defer if (!self.future_finished) self.future.cancel(io) catch {};
 
-    var event: c.XEvent = undefined;
     while (true) {
-        _ = c.XNextEvent(display, &event);
-        if (event.type == c.GenericEvent and event.xgeneric.extension == xi_opcode and
-            c.XGetEventData(display, &event.xcookie) != 0)
-        {
-            const cookie = &event.xcookie;
-            defer c.XFreeEventData(display, cookie);
-
-            if (cookie.evtype == c.XI_Motion) {
-                const raw_event: *c.XIDeviceEvent = @ptrCast(@alignCast(cookie.data));
-                const x = raw_event.event_x;
-                const y = raw_event.event_y;
-
-                const any_buttons_held = blk: for (0..@intCast(raw_event.buttons.mask_len)) |i| {
-                    if (raw_event.buttons.mask[i >> 3] & (@as(u8, 1) << @as(u3, @intCast(i & 7))) != 0) {
-                        break :blk true;
-                    }
-                } else false;
-
-                try self.handleMotion(io, x, y, any_buttons_held);
-            }
-
-            if (cookie.evtype == c.XI_ButtonPress) {
-                self.handleButtonPress(io);
+        const events = try recorder.waitForEvents();
+        for (events) |ev| {
+            switch (ev) {
+                .motion => |m| {
+                    const any_buttons_held = (m.state >> 8) != 0;
+                    try self.handleMotion(io, m.x, m.y, any_buttons_held);
+                },
+                .button_press => self.handleButtonPress(io),
             }
         }
     }
