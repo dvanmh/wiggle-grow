@@ -11,7 +11,7 @@ Requirements:
 
 - X11 development libraries
 - libXcursor development library
-- libXi (XInput2) development library
+- libXtst (X Record extension) development library
 - Zig (0.16.0)
 
 ```bash
