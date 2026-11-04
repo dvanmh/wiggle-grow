@@ -76,9 +76,9 @@ This mode creates a transparent, click-through overlay window that follows your 
   + More resource intensive than cursor mode.
   + May have a very slight lag behind the actual cursor position.
 
-#### Note for Compositor Users (picom)
+#### Note for picom Users
 
-If you use `picom`, add the following to the `rules` section in your `picom.conf` to prevent artifacts like shadows, blur, or fading on the overlay window:
+If you use `picom`, add the following to the `rules` section in your `picom.conf` to prevent artifacts like shadows, blur, or animation on the overlay window:
 
 ```
 {
@@ -89,6 +89,16 @@ If you use `picom`, add the following to the `rules` section in your `picom.conf
   fade = false;
   opacity = 1;
   shadow = false;
+  animations = (
+    {
+      triggers = [
+        "open", "close", "show", "hide",
+        "increase-opacity", "decrease-opacity",
+        "size", "position", "color", "geometry"
+      ];
+      noop = 0;
+    },
+  );
 }
 ```
 
