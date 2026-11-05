@@ -94,7 +94,7 @@ If you use `picom`, add the following to the `rules` section in your `picom.conf
       triggers = [
         "open", "close", "show", "hide",
         "increase-opacity", "decrease-opacity",
-        "size", "position", "color", "geometry"
+        "size", "position", "color"
       ];
       noop = 0;
     },
